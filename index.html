@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="無音カメラ">
+<meta name="theme-color" content="#000000">
+<title>無音カメラ</title>
+<style>
+  :root {
+    --bg: #000;
+    --fg: #f5f5f2;
+    --muted: rgba(245, 245, 242, .62);
+    --chip: rgba(30, 30, 30, .62);
+    --accent: #ffcc33;
+    --danger: #ff5a4e;
+    --font: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  [hidden] { display: none !important; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font-family: var(--font); overflow: hidden; overscroll-behavior: none;
+    -webkit-user-select: none; user-select: none; touch-action: none;
+  }
+  button {
+    font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer;
+  }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+  #stage { position: fixed; inset: 0; overflow: hidden; background: var(--bg); }
+  #video {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: contain; transform-origin: 50% 50%;
+  }
+  #frame { position: absolute; pointer-events: none; }
+  #grid { position: absolute; inset: 0; display: none; }
+  #grid.on { display: block; }
+  #grid::before, #grid::after {
+    content: ""; position: absolute; inset: 0;
+    border-color: rgba(255,255,255,.35); border-style: solid;
+  }
+  #grid::before { left: 33.333%; right: 33.333%; border-width: 0 1px; }
+  #grid::after { top: 33.333%; bottom: 33.333%; border-width: 1px 0; }
+
+  #flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity .25s ease-out; }
+  #flash.go { opacity: .75; transition: none; }
+
+  #count {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    font-size: 30vmin; font-weight: 200; color: var(--fg);
+    text-shadow: 0 2px 20px rgba(0,0,0,.5); pointer-events: none;
+  }
+
+  /* top bar */
+  #top {
+    position: absolute; top: 0; left: 0; right: 0;
+    padding-top: calc(env(safe-area-inset-top, 0px) + 10px);
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  }
+  .pill {
+    height: 32px; padding: 0 12px; border-radius: 16px; background: var(--chip);
+    display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600;
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  }
+  .pill.on { color: var(--accent); }
+  #res { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 500; }
+  .pill svg { width: 16px; height: 16px; }
+
+  /* bottom controls */
+  #bottom {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex; flex-direction: column; align-items: center; gap: 18px;
+    background: linear-gradient(to top, rgba(0,0,0,.55), transparent);
+    padding-top: 30px;
+  }
+  #zooms { display: flex; gap: 8px; padding: 4px; border-radius: 22px; background: var(--chip);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+  .z {
+    min-width: 38px; height: 38px; border-radius: 19px; font-size: 13px; font-weight: 700;
+    font-variant-numeric: tabular-nums; color: var(--fg);
+  }
+  .z.on { background: rgba(255,255,255,.14); color: var(--accent); }
+  #row { width: 100%; max-width: 420px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; }
+  #thumb {
+    justify-self: start; width: 52px; height: 52px; border-radius: 10px; overflow: hidden;
+    background: rgba(255,255,255,.08); border: 2px solid rgba(255,255,255,.85);
+    position: relative;
+  }
+  #thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #thumb[disabled] { opacity: .35; border-color: rgba(255,255,255,.4); }
+  #badge {
+    position: absolute; top: -6px; right: -6px; min-width: 20px; height: 20px; padding: 0 5px;
+    border-radius: 10px; background: var(--accent); color: #000; font-size: 11px; font-weight: 800;
+    display: grid; place-items: center;
+  }
+  #shutter {
+    width: 78px; height: 78px; border-radius: 50%; border: 4px solid var(--fg);
+    display: grid; place-items: center;
+  }
+  #shutter::after {
+    content: ""; width: 62px; height: 62px; border-radius: 50%; background: var(--fg);
+    transition: transform .12s;
+  }
+  #shutter:active::after { transform: scale(.88); }
+  #shutter.counting::after { background: var(--danger); transform: scale(.55); border-radius: 10px; }
+  #flip {
+    justify-self: end; width: 52px; height: 52px; border-radius: 50%; background: var(--chip);
+    display: grid; place-items: center;
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  }
+  #flip svg { width: 26px; height: 26px; transition: transform .35s; }
+  #flip.spin svg { transform: rotate(180deg); }
+
+  /* status / errors */
+  #msg {
+    position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
+    padding: 0 max(24px, env(safe-area-inset-left, 0px)); pointer-events: none;
+  }
+  #msg div { max-width: 340px; line-height: 1.7; font-size: 15px; }
+  #msg b { display: block; font-size: 17px; margin-bottom: 6px; }
+  #msg button { pointer-events: auto; margin-top: 16px; }
+  .btn {
+    height: 44px; padding: 0 20px; border-radius: 22px; background: var(--fg); color: #000;
+    font-weight: 700; font-size: 15px;
+  }
+  .btn.ghost { background: rgba(255,255,255,.12); color: var(--fg); }
+  .btn.danger { background: rgba(255,90,78,.16); color: var(--danger); }
+
+  #toast {
+    position: absolute; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 56px);
+    transform: translateX(-50%); padding: 8px 14px; border-radius: 16px;
+    background: rgba(0,0,0,.72); font-size: 13px; opacity: 0; transition: opacity .2s;
+    pointer-events: none; white-space: nowrap; max-width: calc(100% - 32px);
+  }
+  #toast.show { opacity: 1; }
+
+  /* viewer */
+  #viewer {
+    position: fixed; inset: 0; background: var(--bg); display: flex; flex-direction: column;
+    padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  #vhead, #vfoot {
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  #vhead { display: flex; align-items: center; justify-content: space-between; padding-block: 10px; gap: 10px; }
+  #vinfo { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; text-align: center; }
+  #vimgwrap { flex: 1; min-height: 0; position: relative; display: grid; place-items: center; }
+  #vimg { max-width: 100%; max-height: 100%; object-fit: contain; -webkit-user-select: auto; user-select: auto; -webkit-touch-callout: default; }
+  .nav {
+    position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 64px;
+    font-size: 30px; color: var(--fg); background: rgba(0,0,0,.35); border-radius: 10px;
+  }
+  #prev { left: max(8px, env(safe-area-inset-left, 0px)); }
+  #next { right: max(8px, env(safe-area-inset-right, 0px)); }
+  #vfoot { padding-block: 12px 14px; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+  #vbtns { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  #vhint { font-size: 12px; color: var(--muted); text-align: center; line-height: 1.6; max-width: 360px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #flash, #flip svg, #shutter::after { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <video id="video" playsinline muted autoplay></video>
+  <div id="frame"><div id="grid"></div></div>
+  <div id="flash"></div>
+  <div id="count" hidden></div>
+  <div id="msg"><div><b>カメラを起動中…</b></div></div>
+
+  <div id="top">
+    <button class="pill" id="gridBtn" aria-pressed="false">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="1.5" width="13" height="13" rx="2"/><path d="M6 1.5v13M10 1.5v13M1.5 6h13M1.5 10h13"/></svg>
+      グリッド
+    </button>
+    <span class="pill" id="res">—</span>
+    <button class="pill" id="timerBtn">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="9" r="5.8"/><path d="M8 9V5.8M6 1.5h4"/></svg>
+      <span id="timerLabel">オフ</span>
+    </button>
+  </div>
+
+  <div id="toast"></div>
+
+  <div id="bottom">
+    <div id="zooms"></div>
+    <div id="row">
+      <button id="thumb" disabled aria-label="撮った写真を見る"></button>
+      <button id="shutter" aria-label="撮影"></button>
+      <button id="flip" aria-label="カメラを切り替え">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.3 4.9L20 16"/><path d="M20 20v-4h-4"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<div id="viewer" hidden>
+  <div id="vhead">
+    <button class="btn ghost" id="vclose">戻る</button>
+    <div id="vinfo"></div>
+    <button class="btn ghost" id="vsaveall">全部保存</button>
+  </div>
+  <div id="vimgwrap">
+    <img id="vimg" alt="撮影した写真">
+    <button class="nav" id="prev" aria-label="前の写真">‹</button>
+    <button class="nav" id="next" aria-label="次の写真">›</button>
+  </div>
+  <div id="vfoot">
+    <div id="vbtns">
+      <button class="btn" id="vsave">写真に保存</button>
+      <button class="btn danger" id="vdel">削除</button>
+    </div>
+    <div id="vhint">「写真に保存」→ 出てきたメニューで「画像を保存」を選ぶと写真アプリに入ります。<br>このアプリを閉じると未保存の写真は消えます。</div>
+  </div>
+</div>
+
+<canvas id="canvas" hidden></canvas>
+
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const video = $('#video'), frame = $('#frame'), grid = $('#grid'), flash = $('#flash');
+  const msg = $('#msg'), res = $('#res'), zoomsEl = $('#zooms'), thumb = $('#thumb');
+  const shutter = $('#shutter'), flipBtn = $('#flip'), countEl = $('#count'), toastEl = $('#toast');
+  const canvas = $('#canvas'), ctx = canvas.getContext('2d');
+  const viewer = $('#viewer'), vimg = $('#vimg'), vinfo = $('#vinfo');
+
+  let stream = null, track = null;
+  let facing = 'environment';
+  let zoom = 1, zoomMin = 1, zoomMax = 5, hwZoom = false;
+  let photos = [], viewIdx = 0;
+  let timer = 0, countdown = null;
+  let starting = false;
+
+  // ---------- helpers ----------
+  function showMsg(title, body, retry) {
+    msg.innerHTML = '';
+    const d = document.createElement('div');
+    const b = document.createElement('b'); b.textContent = title; d.appendChild(b);
+    if (body) { const p = document.createElement('span'); p.textContent = body; d.appendChild(p); }
+    if (retry) {
+      const br = document.createElement('br'); d.appendChild(br);
+      const btn = document.createElement('button'); btn.className = 'btn'; btn.textContent = 'もう一度試す';
+      btn.onclick = start; d.appendChild(btn);
+    }
+    msg.appendChild(d); msg.hidden = false;
+  }
+  let toastT;
+  function toast(t) {
+    toastEl.textContent = t; toastEl.classList.add('show');
+    clearTimeout(toastT); toastT = setTimeout(() => toastEl.classList.remove('show'), 1800);
+  }
+  const pad = n => String(n).padStart(2, '0');
+  function fileName() {
+    const d = new Date();
+    return `IMG_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}_${String(d.getMilliseconds()).padStart(3,'0')}.jpg`;
+  }
+  const fmtSize = b => b > 1048576 ? (b/1048576).toFixed(1) + 'MB' : Math.round(b/1024) + 'KB';
+
+  // ---------- camera ----------
+  function stop() {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = null; track = null;
+  }
+
+  async function start() {
+    if (starting) return;
+    starting = true;
+    stop();
+    showMsg('カメラを起動中…');
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      showMsg('カメラを使えません', 'https:// で始まるアドレス(GitHub Pages など)を Safari で開いてください。');
+      starting = false; return;
+    }
+    const sizes = [
+      { width: { ideal: 4032 }, height: { ideal: 3024 } },
+      { width: { ideal: 1920 }, height: { ideal: 1080 } },
+      {}
+    ];
+    let err = null;
+    for (const s of sizes) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: Object.assign({ facingMode: { ideal: facing } }, s)
+        });
+        err = null; break;
+      } catch (e) {
+        err = e;
+        if (e.name === 'NotAllowedError' || e.name === 'SecurityError') break;
+      }
+    }
+    if (!stream) {
+      if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) {
+        showMsg('カメラが許可されていません', 'iPhoneの「設定」→「アプリ」→「Safari」→「カメラ」を「許可」にしてから、もう一度試してください。', true);
+      } else {
+        showMsg('カメラを起動できませんでした', err ? err.message : '', true);
+      }
+      starting = false; return;
+    }
+    track = stream.getVideoTracks()[0];
+
+    // 端末が対応する最大解像度に引き上げる
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    if (caps.width?.max && caps.height?.max) {
+      try {
+        await track.applyConstraints({ width: { ideal: caps.width.max }, height: { ideal: caps.height.max } });
+      } catch (_) {}
+    }
+
+    // ズーム: 光学/ハードウェアズームが使えればそれを、なければデジタルズーム
+    const c2 = track.getCapabilities ? track.getCapabilities() : {};
+    if (c2.zoom && c2.zoom.max > c2.zoom.min) {
+      hwZoom = true; zoomMin = c2.zoom.min; zoomMax = Math.min(c2.zoom.max, 10);
+    } else {
+      hwZoom = false; zoomMin = 1; zoomMax = 5;
+    }
+    zoom = Math.max(zoomMin, Math.min(1, zoomMax));
+    if (zoomMin > 1) zoom = zoomMin;
+
+    video.srcObject = stream;
+    try { await video.play(); } catch (_) {}
+    msg.hidden = true;
+    buildZooms();
+    applyZoom();
+    starting = false;
+  }
+
+  function updateLayout() {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw) return;
+    res.textContent = `${vw}×${vh}・${(vw*vh/1e6).toFixed(1)}MP`;
+    const W = innerWidth, H = innerHeight;
+    const s = Math.min(W / vw, H / vh);
+    const w = vw * s, h = vh * s;
+    Object.assign(frame.style, { width: w + 'px', height: h + 'px', left: (W - w) / 2 + 'px', top: (H - h) / 2 + 'px' });
+  }
+  video.addEventListener('loadedmetadata', updateLayout);
+  video.addEventListener('resize', updateLayout);
+  addEventListener('resize', updateLayout);
+
+  // ---------- zoom ----------
+  function buildZooms() {
+    zoomsEl.innerHTML = '';
+    const opts = [0.5, 1, 2, 3, 5].filter(z => z >= zoomMin - 0.01 && z <= zoomMax + 0.01);
+    if (opts.length < 2) { zoomsEl.hidden = true; return; }
+    zoomsEl.hidden = false;
+    for (const z of opts) {
+      const b = document.createElement('button');
+      b.className = 'z'; b.dataset.z = z;
+      b.onclick = () => { zoom = z; applyZoom(); };
+      zoomsEl.appendChild(b);
+    }
+    markZoom();
+  }
+  function markZoom() {
+    const btns = [...zoomsEl.children];
+    let best = null, bd = Infinity;
+    for (const b of btns) { const d = Math.abs(+b.dataset.z - zoom); if (d < bd) { bd = d; best = b; } }
+    for (const b of btns) {
+      const z = +b.dataset.z, on = b === best;
+      b.classList.toggle('on', on);
+      const shown = on ? zoom : z;
+      b.textContent = (Math.round(shown * 10) / 10).toString().replace(/^0\./, '.') + (on ? '×' : '');
+    }
+  }
+  let zoomRaf = 0;
+  function applyZoom() {
+    zoom = Math.max(zoomMin, Math.min(zoomMax, zoom));
+    const mirror = facing === 'user' ? ' scaleX(-1)' : '';
+    if (hwZoom) {
+      video.style.transform = mirror.trim() || 'none';
+      cancelAnimationFrame(zoomRaf);
+      zoomRaf = requestAnimationFrame(() => {
+        track?.applyConstraints({ advanced: [{ zoom }] }).catch(() => {});
+      });
+    } else {
+      video.style.transform = `scale(${zoom})${mirror}`;
+    }
+    markZoom();
+  }
+
+  // ピンチでズーム
+  let pinch0 = 0, zoom0 = 1;
+  const stage = $('#stage');
+  const dist = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  stage.addEventListener('touchstart', e => {
+    if (e.touches.length === 2) { pinch0 = dist(e.touches); zoom0 = zoom; }
+  }, { passive: true });
+  stage.addEventListener('touchmove', e => {
+    if (e.touches.length === 2 && pinch0) { zoom = zoom0 * dist(e.touches) / pinch0; applyZoom(); }
+  }, { passive: true });
+  stage.addEventListener('touchend', e => { if (e.touches.length < 2) pinch0 = 0; }, { passive: true });
+  // iOS のページ拡大を止める
+  document.addEventListener('gesturestart', e => e.preventDefault());
+
+  // ---------- capture (無音) ----------
+  async function capture() {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw) return;
+    let sx = 0, sy = 0, sw = vw, sh = vh;
+    if (!hwZoom && zoom > 1) {
+      sw = vw / zoom; sh = vh / zoom; sx = (vw - sw) / 2; sy = (vh - sh) / 2;
+    }
+    canvas.width = Math.round(sw); canvas.height = Math.round(sh);
+    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+
+    flash.classList.add('go');
+    requestAnimationFrame(() => requestAnimationFrame(() => flash.classList.remove('go')));
+
+    const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.95));
+    if (!blob) { toast('保存用の画像を作れませんでした'); return; }
+    const p = { blob, url: URL.createObjectURL(blob), name: fileName(), w: canvas.width, h: canvas.height };
+    photos.unshift(p);
+    updateThumb();
+  }
+
+  function updateThumb() {
+    thumb.innerHTML = '';
+    if (!photos.length) { thumb.disabled = true; return; }
+    thumb.disabled = false;
+    const img = document.createElement('img'); img.src = photos[0].url; img.alt = '';
+    thumb.appendChild(img);
+    const b = document.createElement('span'); b.id = 'badge'; b.textContent = photos.length;
+    thumb.appendChild(b);
+  }
+
+  function cancelCountdown() {
+    clearInterval(countdown); countdown = null;
+    countEl.hidden = true; shutter.classList.remove('counting');
+  }
+  shutter.addEventListener('click', () => {
+    if (countdown) { cancelCountdown(); toast('タイマーを止めました'); return; }
+    if (!timer) { capture(); return; }
+    let n = timer;
+    countEl.textContent = n; countEl.hidden = false; shutter.classList.add('counting');
+    countdown = setInterval(() => {
+      n--;
+      if (n <= 0) { cancelCountdown(); capture(); }
+      else countEl.textContent = n;
+    }, 1000);
+  });
+
+  flipBtn.addEventListener('click', () => {
+    cancelCountdown();
+    facing = facing === 'environment' ? 'user' : 'environment';
+    flipBtn.classList.toggle('spin');
+    start();
+  });
+
+  $('#gridBtn').addEventListener('click', e => {
+    const on = grid.classList.toggle('on');
+    e.currentTarget.classList.toggle('on', on);
+    e.currentTarget.setAttribute('aria-pressed', on);
+  });
+  $('#timerBtn').addEventListener('click', e => {
+    timer = timer === 0 ? 3 : timer === 3 ? 10 : 0;
+    $('#timerLabel').textContent = timer ? timer + '秒' : 'オフ';
+    e.currentTarget.classList.toggle('on', !!timer);
+  });
+
+  // ---------- viewer ----------
+  function openViewer(i) {
+    if (!photos.length) return;
+    viewIdx = Math.max(0, Math.min(photos.length - 1, i));
+    const p = photos[viewIdx];
+    vimg.src = p.url;
+    vinfo.textContent = `${viewIdx + 1} / ${photos.length}・${p.w}×${p.h}・${fmtSize(p.blob.size)}`;
+    $('#prev').hidden = viewIdx === 0;
+    $('#next').hidden = viewIdx === photos.length - 1;
+    $('#vsaveall').hidden = photos.length < 2;
+    viewer.hidden = false;
+  }
+  thumb.addEventListener('click', () => openViewer(0));
+  $('#vclose').addEventListener('click', () => { viewer.hidden = true; });
+  $('#prev').addEventListener('click', () => openViewer(viewIdx - 1));
+  $('#next').addEventListener('click', () => openViewer(viewIdx + 1));
+
+  // 横スワイプで写真送り
+  let sx0 = null;
+  vimg.addEventListener('touchstart', e => { sx0 = e.touches.length === 1 ? e.touches[0].clientX : null; }, { passive: true });
+  vimg.addEventListener('touchend', e => {
+    if (sx0 == null) return;
+    const dx = e.changedTouches[0].clientX - sx0; sx0 = null;
+    if (Math.abs(dx) > 50) openViewer(viewIdx + (dx < 0 ? 1 : -1));
+  }, { passive: true });
+
+  async function saveFiles(list) {
+    const files = list.map(p => new File([p.blob], p.name, { type: 'image/jpeg' }));
+    if (navigator.canShare && navigator.canShare({ files })) {
+      try { await navigator.share({ files }); return; }
+      catch (e) { if (e.name === 'AbortError') return; }
+    }
+    // 共有が使えない場合はダウンロード
+    for (const p of list) {
+      const a = document.createElement('a');
+      a.href = p.url; a.download = p.name;
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+    toast('ダウンロードしました');
+  }
+  $('#vsave').addEventListener('click', () => saveFiles([photos[viewIdx]]));
+  $('#vsaveall').addEventListener('click', () => saveFiles(photos.slice()));
+
+  const vdel = $('#vdel');
+  let delArmed = false, delT;
+  vdel.addEventListener('click', () => {
+    if (!delArmed) {
+      delArmed = true; vdel.textContent = 'もう一度押すと削除';
+      clearTimeout(delT); delT = setTimeout(() => { delArmed = false; vdel.textContent = '削除'; }, 2500);
+      return;
+    }
+    clearTimeout(delT); delArmed = false; vdel.textContent = '削除';
+    const [p] = photos.splice(viewIdx, 1);
+    URL.revokeObjectURL(p.url);
+    updateThumb();
+    if (!photos.length) { viewer.hidden = true; return; }
+    openViewer(Math.min(viewIdx, photos.length - 1));
+  });
+
+  // ---------- lifecycle ----------
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { cancelCountdown(); stop(); }
+    else start();
+  });
+  addEventListener('beforeunload', e => {
+    if (photos.length) { e.preventDefault(); e.returnValue = ''; }
+  });
+
+  start();
+})();
+</script>
+</body>
+</html>
