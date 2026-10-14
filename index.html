@@ -186,7 +186,7 @@
   <div id="frame"><div id="grid"></div></div>
   <div id="flash"></div>
   <div id="count" hidden></div>
-  <div id="hold" hidden>そのまま動かさないで…</div>
+  <div id="hold" hidden>そのまま…</div>
   <div id="msg"><div><b>カメラを起動中…</b></div></div>
 
   <div id="top">
@@ -194,10 +194,11 @@
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="1.5" width="13" height="13" rx="2"/><path d="M6 1.5v13M10 1.5v13M1.5 6h13M1.5 10h13"/></svg>
     </button>
     <span class="pill" id="res">—</span>
-    <button class="pill" id="hqBtn" aria-pressed="false">高画質 <span id="hqLabel">オフ</span></button>
+    <button class="pill" id="hqBtn" aria-pressed="false">ブレ補正</button>
+    <button class="pill" id="textBtn" aria-pressed="false">文字</button>
     <button class="pill" id="timerBtn">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="9" r="5.8"/><path d="M8 9V5.8M6 1.5h4"/></svg>
-      <span id="timerLabel">オフ</span>
+      <span id="timerLabel" hidden></span>
     </button>
   </div>
 
@@ -422,6 +423,66 @@
     else setTimeout(r, 40);
   });
 
+  // 映像の中央部分のくっきり度(ラプラシアンの分散)を測る
+  const probe = document.createElement('canvas');
+  const pctx = probe.getContext('2d', { willReadFrequently: true });
+  function sharpness(sx, sy, sw, sh) {
+    const cw = sw * 0.5, ch = sh * 0.5;
+    const W = 480, H = Math.max(1, Math.round(W * ch / cw));
+    probe.width = W; probe.height = H;
+    pctx.drawImage(video, sx + (sw - cw) / 2, sy + (sh - ch) / 2, cw, ch, 0, 0, W, H);
+    const d = pctx.getImageData(0, 0, W, H).data;
+    const g = new Float32Array(W * H);
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = d[j] * .299 + d[j+1] * .587 + d[j+2] * .114;
+    let sum = 0, sum2 = 0, cnt = 0;
+    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x;
+      const l = 4 * g[i] - g[i-1] - g[i+1] - g[i-W] - g[i+W];
+      sum += l; sum2 += l * l; cnt++;
+    }
+    const m = sum / cnt;
+    return sum2 / cnt - m * m;
+  }
+
+  // 文字モード: 背景の明るさムラを消して白くそろえ、線と文字を濃くする(書類スキャン方式)
+  function blurred(src, W, H, f) {
+    const tmp = document.createElement('canvas');
+    tmp.width = Math.max(1, Math.round(W / f)); tmp.height = Math.max(1, Math.round(H / f));
+    const tctx = tmp.getContext('2d');
+    tctx.imageSmoothingQuality = 'high';
+    tctx.drawImage(src, 0, 0, tmp.width, tmp.height);
+    const out = document.createElement('canvas');
+    out.width = W; out.height = H;
+    const octx = out.getContext('2d', { willReadFrequently: true });
+    octx.imageSmoothingQuality = 'high';
+    octx.drawImage(tmp, 0, 0, W, H);
+    tmp.width = tmp.height = 0;
+    return { canvas: out, ctx: octx };
+  }
+  function enhanceText() {
+    const W = canvas.width, H = canvas.height;
+    const fine = blurred(canvas, W, H, 3);   // 輪郭強調用
+    const bg = blurred(canvas, W, H, 24);    // 背景の明るさ
+    const sharpen = 0.6, strength = 3.5;
+    const STRIP = 256;
+    for (let y = 0; y < H; y += STRIP) {
+      const h = Math.min(STRIP, H - y);
+      const img = ctx.getImageData(0, y, W, h), d = img.data;
+      const f = fine.ctx.getImageData(0, y, W, h).data;
+      const b = bg.ctx.getImageData(0, y, W, h).data;
+      for (let j = 0; j < d.length; j += 4) {
+        for (let c = 0; c < 3; c++) {
+          const o = d[j+c];
+          const s = o + sharpen * (o - f[j+c]);
+          const r = s / Math.max(b[j+c], 1);
+          d[j+c] = 255 - (1 - r) * strength * 255;
+        }
+      }
+      ctx.putImageData(img, 0, y);
+    }
+    fine.canvas.width = fine.canvas.height = bg.canvas.width = bg.canvas.height = 0;
+  }
+
   let busy = false;
   async function capture() {
     const vw = video.videoWidth, vh = video.videoHeight;
@@ -433,15 +494,24 @@
     }
     canvas.width = Math.round(sw); canvas.height = Math.round(sh);
 
-    // 高画質モード: 連続したフレームを平均してノイズを減らす
-    const n = hq ? 6 : 1;
-    if (n > 1) $('#hold').hidden = false;
+    // ブレ補正: 連続した8フレームのうち、一番くっきりしたものを残す
+    const n = hq ? 8 : 1;
+    if (n > 1 || textMode) $('#hold').hidden = false;
+    let best = -1;
     for (let i = 0; i < n; i++) {
       if (i > 0) await nextFrame();
-      ctx.globalAlpha = 1 / (i + 1);
-      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      const s = n > 1 ? sharpness(sx, sy, sw, sh) : 0;
+      if (s > best) {
+        best = s;
+        ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      }
     }
-    ctx.globalAlpha = 1;
+    if (textMode) {
+      $('#hold').textContent = '文字を処理中…';
+      await new Promise(r => setTimeout(r, 30));
+      enhanceText();
+      $('#hold').textContent = 'そのまま…';
+    }
     $('#hold').hidden = true;
 
     flash.classList.add('go');
@@ -493,17 +563,24 @@
     e.currentTarget.classList.toggle('on', on);
     e.currentTarget.setAttribute('aria-pressed', on);
   });
-  let hq = false;
+  let hq = false, textMode = false;
   $('#hqBtn').addEventListener('click', e => {
     hq = !hq;
-    $('#hqLabel').textContent = hq ? 'オン' : 'オフ';
     e.currentTarget.classList.toggle('on', hq);
     e.currentTarget.setAttribute('aria-pressed', hq);
-    toast(hq ? '6枚重ねてノイズを減らします(撮影中は動かさないで)' : '高画質モードをオフにしました');
+    toast(hq ? 'ブレ補正オン:8枚から一番くっきりした1枚を選びます' : 'ブレ補正をオフにしました');
+  });
+  $('#textBtn').addEventListener('click', e => {
+    textMode = !textMode;
+    e.currentTarget.classList.toggle('on', textMode);
+    e.currentTarget.setAttribute('aria-pressed', textMode);
+    toast(textMode ? '文字モードオン:スライドや黒板の文字をくっきりさせます' : '文字モードをオフにしました');
   });
   $('#timerBtn').addEventListener('click', e => {
     timer = timer === 0 ? 3 : timer === 3 ? 10 : 0;
-    $('#timerLabel').textContent = timer ? timer + '秒' : 'オフ';
+    $('#timerLabel').textContent = timer ? timer + '秒' : '';
+    $('#timerLabel').hidden = !timer;
+    toast(timer ? `${timer}秒タイマー` : 'タイマーをオフにしました');
     e.currentTarget.classList.toggle('on', !!timer);
   });
 
