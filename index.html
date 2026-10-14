@@ -70,6 +70,13 @@
     -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
   }
   .pill.on { color: var(--accent); }
+  .pill.icon { width: 32px; padding: 0; justify-content: center; }
+  #shutter.busy { opacity: .5; }
+  #hold {
+    position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%);
+    padding: 10px 16px; border-radius: 18px; background: rgba(0,0,0,.6);
+    font-size: 15px; font-weight: 600; pointer-events: none;
+  }
   #res { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 500; }
   .pill svg { width: 16px; height: 16px; }
 
@@ -179,14 +186,15 @@
   <div id="frame"><div id="grid"></div></div>
   <div id="flash"></div>
   <div id="count" hidden></div>
+  <div id="hold" hidden>そのまま動かさないで…</div>
   <div id="msg"><div><b>カメラを起動中…</b></div></div>
 
   <div id="top">
-    <button class="pill" id="gridBtn" aria-pressed="false">
+    <button class="pill icon" id="gridBtn" aria-pressed="false" aria-label="グリッド">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="1.5" width="13" height="13" rx="2"/><path d="M6 1.5v13M10 1.5v13M1.5 6h13M1.5 10h13"/></svg>
-      グリッド
     </button>
     <span class="pill" id="res">—</span>
+    <button class="pill" id="hqBtn" aria-pressed="false">高画質 <span id="hqLabel">オフ</span></button>
     <button class="pill" id="timerBtn">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="9" r="5.8"/><path d="M8 9V5.8M6 1.5h4"/></svg>
       <span id="timerLabel">オフ</span>
@@ -342,7 +350,7 @@
   function updateLayout() {
     const vw = video.videoWidth, vh = video.videoHeight;
     if (!vw) return;
-    res.textContent = `${vw}×${vh}・${(vw*vh/1e6).toFixed(1)}MP`;
+    res.textContent = `${(vw*vh/1e6).toFixed(1)}MP`;
     const W = innerWidth, H = innerHeight;
     const s = Math.min(W / vw, H / vh);
     const w = vw * s, h = vh * s;
@@ -408,20 +416,39 @@
   document.addEventListener('gesturestart', e => e.preventDefault());
 
   // ---------- capture (無音) ----------
+  // 次の新しい映像フレームを待つ
+  const nextFrame = () => new Promise(r => {
+    if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => r());
+    else setTimeout(r, 40);
+  });
+
+  let busy = false;
   async function capture() {
     const vw = video.videoWidth, vh = video.videoHeight;
-    if (!vw) return;
+    if (!vw || busy) return;
+    busy = true; shutter.classList.add('busy');
     let sx = 0, sy = 0, sw = vw, sh = vh;
     if (!hwZoom && zoom > 1) {
       sw = vw / zoom; sh = vh / zoom; sx = (vw - sw) / 2; sy = (vh - sh) / 2;
     }
     canvas.width = Math.round(sw); canvas.height = Math.round(sh);
-    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+
+    // 高画質モード: 連続したフレームを平均してノイズを減らす
+    const n = hq ? 6 : 1;
+    if (n > 1) $('#hold').hidden = false;
+    for (let i = 0; i < n; i++) {
+      if (i > 0) await nextFrame();
+      ctx.globalAlpha = 1 / (i + 1);
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    }
+    ctx.globalAlpha = 1;
+    $('#hold').hidden = true;
 
     flash.classList.add('go');
     requestAnimationFrame(() => requestAnimationFrame(() => flash.classList.remove('go')));
 
-    const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.95));
+    const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.98));
+    busy = false; shutter.classList.remove('busy');
     if (!blob) { toast('保存用の画像を作れませんでした'); return; }
     const p = { blob, url: URL.createObjectURL(blob), name: fileName(), w: canvas.width, h: canvas.height };
     photos.unshift(p);
@@ -465,6 +492,14 @@
     const on = grid.classList.toggle('on');
     e.currentTarget.classList.toggle('on', on);
     e.currentTarget.setAttribute('aria-pressed', on);
+  });
+  let hq = false;
+  $('#hqBtn').addEventListener('click', e => {
+    hq = !hq;
+    $('#hqLabel').textContent = hq ? 'オン' : 'オフ';
+    e.currentTarget.classList.toggle('on', hq);
+    e.currentTarget.setAttribute('aria-pressed', hq);
+    toast(hq ? '6枚重ねてノイズを減らします(撮影中は動かさないで)' : '高画質モードをオフにしました');
   });
   $('#timerBtn').addEventListener('click', e => {
     timer = timer === 0 ? 3 : timer === 3 ? 10 : 0;
