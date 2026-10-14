@@ -463,7 +463,7 @@
     const W = canvas.width, H = canvas.height;
     const fine = blurred(canvas, W, H, 3);   // 輪郭強調用
     const bg = blurred(canvas, W, H, 24);    // 背景の明るさ
-    const sharpen = 0.6, strength = 3.5;
+    const sharpen = 0.5, strength = 2.6;
     const STRIP = 256;
     for (let y = 0; y < H; y += STRIP) {
       const h = Math.min(STRIP, H - y);
@@ -471,11 +471,16 @@
       const f = fine.ctx.getImageData(0, y, W, h).data;
       const b = bg.ctx.getImageData(0, y, W, h).data;
       for (let j = 0; j < d.length; j += 4) {
+        // 明るい背景(スライド・紙・黒板の白地)の部分だけ処理し、暗い部分は元のまま
+        const bl = b[j] * .299 + b[j+1] * .587 + b[j+2] * .114;
+        const w = Math.min(1, Math.max(0, (bl - 120) / 70));
+        if (w === 0) continue;
         for (let c = 0; c < 3; c++) {
           const o = d[j+c];
           const s = o + sharpen * (o - f[j+c]);
           const r = s / Math.max(b[j+c], 1);
-          d[j+c] = 255 - (1 - r) * strength * 255;
+          const e = Math.min(255, Math.max(0, 255 - (1 - r) * strength * 255));
+          d[j+c] = o + (e - o) * w;
         }
       }
       ctx.putImageData(img, 0, y);
